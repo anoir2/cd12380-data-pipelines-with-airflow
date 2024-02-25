@@ -5,6 +5,7 @@ from airflow.decorators import dag
 from airflow.operators.dummy_operator import DummyOperator
 from operators import (StageToRedshiftOperator, LoadFactOperator,
                        LoadDimensionOperator, DataQualityOperator)
+from operators.data_quality import (TableIsEmptyCheck, QueryHaveExpectedResultCheck)
 from helpers import SqlQueries
 
 
@@ -86,30 +87,34 @@ def final_project():
         truncate_before_insert=True
     )
 
-    tables = ["songplays", "users", "songs", "artists", "time"]
+    dq_checks=[
+        TableIsEmptyCheck("songplays"),
+        TableIsEmptyCheck("users"),
+        TableIsEmptyCheck("songs"),
+        TableIsEmptyCheck("artists"),
+        TableIsEmptyCheck("time"),
+        QueryHaveExpectedResultCheck("SELECT COUNT(*) FROM songplays WHERE songplay_id is null", 0),
+        QueryHaveExpectedResultCheck("SELECT COUNT(*) FROM users WHERE user_id is null", 0),
+        QueryHaveExpectedResultCheck("SELECT COUNT(*) FROM songs WHERE song_id is null", 0),
+        QueryHaveExpectedResultCheck("SELECT COUNT(*) FROM artists WHERE artist_id is null", 0),
+        QueryHaveExpectedResultCheck("SELECT COUNT(*) FROM time WHERE start_time is null", 0)
+    ]
     run_quality_checks = DataQualityOperator(
         task_id='Run_data_quality_checks',
         redshift_connection_id="redshift",
-        tables=tables
+        checks=dq_checks
     ) 
 
     end_operator = DummyOperator(task_id='End_execution')
 
-    start_operator >> stage_events_to_redshift
-    start_operator >> stage_songs_to_redshift
+    start_operator >> [stage_events_to_redshift, stage_songs_to_redshift]
 
-    stage_songs_to_redshift >> load_songplays_table
-    stage_events_to_redshift >> load_songplays_table
+    [stage_songs_to_redshift, stage_events_to_redshift] >> load_songplays_table
 
-    load_songplays_table >> load_user_dimension_table
-    load_songplays_table >> load_song_dimension_table
-    load_songplays_table >> load_artist_dimension_table
-    load_songplays_table >> load_time_dimension_table
+    load_songplays_table >> [load_user_dimension_table,load_song_dimension_table, load_artist_dimension_table, load_time_dimension_table]
 
-    load_user_dimension_table >> run_quality_checks
-    load_song_dimension_table >> run_quality_checks
-    load_artist_dimension_table >> run_quality_checks
-    load_time_dimension_table >> run_quality_checks
+    [load_user_dimension_table, load_song_dimension_table, 
+     load_artist_dimension_table, load_time_dimension_table] >> run_quality_checks
 
     run_quality_checks >> end_operator
 
